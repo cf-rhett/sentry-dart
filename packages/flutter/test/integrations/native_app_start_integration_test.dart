@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mockito/mockito.dart';
 import 'package:sentry/src/platform/mock_platform.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
+import 'package:sentry_flutter/src/app_start/app_start_trace.dart';
 import 'package:sentry_flutter/src/integrations/native_app_start_integration.dart';
 import 'package:sentry_flutter/src/native/native_app_start.dart';
 import 'package:sentry_flutter/src/navigation/time_to_display_tracker.dart';
@@ -32,6 +33,7 @@ void main() {
       await pumpEventQueue();
 
       expect(fixture.appStartRoots, hasLength(1));
+      expect(fixture.options.appStartTrace, isNotNull);
       expect(fixture.frameHandler.timingsCallback, isNotNull);
     });
 
@@ -88,6 +90,15 @@ void main() {
       expect(fixture.frameHandler.timingsCallback, isNull);
     });
 
+    test('creates the static extension child', () async {
+      await fixture.callIntegration();
+
+      fixture.options.appStartTrace!.tryCreateExtension(fixture.snapshot);
+
+      expect(fixture.options.appStartTrace!.activeStaticExtension, isNotNull);
+      expect(fixture.options.appStartTrace!.activeStreamingExtension, isNull);
+    });
+
     test('keeps the first-frame callback after empty timings', () async {
       await fixture.callIntegration();
       final callback = fixture.frameHandler.timingsCallback!;
@@ -122,7 +133,18 @@ void main() {
       fixture.sut.close();
 
       expect(root.tracer.finished, isTrue);
+      expect(fixture.options.appStartTrace, isNull);
       expect(fixture.frameHandler.timingsCallback, isNull);
+    });
+
+    test('close preserves a replacement trace', () async {
+      await fixture.callIntegration();
+      final replacement = _NoOpAppStartTrace();
+      fixture.options.appStartTrace = replacement;
+
+      fixture.sut.close();
+
+      expect(fixture.options.appStartTrace, same(replacement));
     });
   });
 }
@@ -182,4 +204,24 @@ class Fixture {
       );
 
   Future<void> callIntegration() => sut.call(hub, options);
+}
+
+final class _NoOpAppStartTrace implements AppStartTrace {
+  @override
+  ISentrySpan? get activeStaticExtension => null;
+
+  @override
+  SentrySpanV2? get activeStreamingExtension => null;
+
+  @override
+  void close() {}
+
+  @override
+  void finishExtension() {}
+
+  @override
+  void recordNaturalEnd(DateTime endTimestamp) {}
+
+  @override
+  bool tryCreateExtension(DateTime startTimestamp) => false;
 }
