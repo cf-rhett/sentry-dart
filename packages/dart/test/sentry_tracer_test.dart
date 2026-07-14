@@ -478,6 +478,49 @@ void main() {
 
       expect(fixture.hub.captureTransactionCalls.first.hint, hint);
     });
+
+    test('final timeout is first-call-wins', () {
+      final sut = fixture.getSut();
+      final firstDeadline = fixture.options.clock().add(
+            Duration(seconds: 1),
+          );
+
+      expect(sut.tryScheduleFinalTimeout(firstDeadline), isTrue);
+      expect(
+        sut.tryScheduleFinalTimeout(firstDeadline.add(Duration(seconds: 1))),
+        isFalse,
+      );
+
+      sut.abandon();
+    });
+
+    test('final timeout marks unfinished children deadline exceeded', () async {
+      final sut = fixture.getSut(waitForChildren: true);
+      final child = sut.startChild('child');
+
+      expect(
+        sut.tryScheduleFinalTimeout(
+          fixture.options.clock().add(Duration(milliseconds: 20)),
+        ),
+        isTrue,
+      );
+      await Future<void>.delayed(Duration(milliseconds: 40));
+
+      expect(sut.status, SpanStatus.deadlineExceeded());
+      expect(child.status, SpanStatus.deadlineExceeded());
+      expect(sut.finished, isTrue);
+      expect(fixture.hub.captureTransactionCalls, hasLength(1));
+    });
+
+    test('abandon suppresses later capture', () async {
+      final sut = fixture.getSut();
+
+      sut.abandon();
+      await sut.finish();
+
+      expect(sut.finished, isTrue);
+      expect(fixture.hub.captureTransactionCalls, isEmpty);
+    });
   });
 
   group('$SentryBaggageHeader', () {

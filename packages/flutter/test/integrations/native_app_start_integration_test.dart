@@ -1,200 +1,185 @@
-@TestOn('vm && !windows && !linux')
-library;
+// ignore_for_file: invalid_use_of_internal_member
 
-import 'dart:core';
 import 'dart:ui';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mockito/mockito.dart';
+import 'package:sentry/src/platform/mock_platform.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
-import 'package:sentry_flutter/src/integrations/integrations.dart';
-import 'package:sentry_flutter/src/integrations/native_app_start_handler.dart';
-import 'package:sentry_flutter/src/integrations/native_app_start_handler_v2.dart';
 import 'package:sentry_flutter/src/integrations/native_app_start_integration.dart';
+import 'package:sentry_flutter/src/native/native_app_start.dart';
+import 'package:sentry_flutter/src/navigation/time_to_display_tracker.dart';
+import 'package:sentry_flutter/src/navigation/time_to_display_tracker_v2.dart';
 
 import '../fake_frame_callback_handler.dart';
 import '../mocks.dart';
 import '../mocks.mocks.dart';
 
 void main() {
-  late Fixture fixture;
-
-  setUp(() {
-    fixture = Fixture();
-    fixture.options.tracesSampleRate = 1.0;
-  });
-
-  final _fakeFrameTiming = FrameTiming(
-      vsyncStart: 10,
-      buildStart: 10,
-      buildFinish: 10,
-      rasterStart: 10,
-      rasterFinish: 10,
-      rasterFinishWallTime: 10);
-
   group('$NativeAppStartIntegration', () {
-    test('does not add integration if tracing is disabled', () {
-      fixture.options.tracesSampleRate = null;
-      fixture.options.tracesSampler = null;
+    late Fixture fixture;
 
-      fixture.callIntegration();
-
-      expect(fixture.options.sdk.integrations,
-          isNot(contains(NativeAppStartIntegration.integrationName)));
+    setUp(() {
+      fixture = Fixture();
     });
 
-    test('adds integration', () async {
-      fixture.callIntegration();
-
-      expect(fixture.options.sdk.integrations,
-          contains(NativeAppStartIntegration.integrationName));
+    tearDown(() {
+      fixture.sut.close();
     });
 
-    test('adds timingsCallback', () async {
-      fixture.callIntegration();
+    test('installs standalone trace before the first frame', () async {
+      await fixture.callIntegration();
+      await pumpEventQueue();
 
-      expect(fixture.frameCallbackHandler.timingsCallback, isNotNull);
+      expect(fixture.appStartRoots, hasLength(1));
+      expect(fixture.frameHandler.timingsCallback, isNotNull);
     });
 
-    test('timingsCallback calls nativeAppStartHandler', () async {
-      fixture.callIntegration();
-
-      final timingsCallback = fixture.frameCallbackHandler.timingsCallback!;
-      timingsCallback([_fakeFrameTiming]);
-
-      expect(fixture.nativeAppStartHandler.calls, 1);
-      expect(fixture.nativeAppStartHandler.appStartEnd, isNotNull);
-      expect(fixture.nativeAppStartHandler.context, isNotNull);
-    });
-
-    test('sets correct app start from timing', () async {
-      fixture.callIntegration();
-
-      final timingsCallback = fixture.frameCallbackHandler.timingsCallback!;
-      timingsCallback([_fakeFrameTiming]);
-
-      expect(fixture.nativeAppStartHandler.calls, 1);
-      expect(fixture.nativeAppStartHandler.appStartEnd, isNotNull);
-      expect(fixture.nativeAppStartHandler.appStartEnd,
-          DateTime.fromMicrosecondsSinceEpoch(10));
-    });
-
-    test('handles timingsCallback exactly once', () async {
-      fixture.callIntegration();
-
-      final timingsCallback = fixture.frameCallbackHandler.timingsCallback!;
-      timingsCallback([_fakeFrameTiming]);
-      timingsCallback([_fakeFrameTiming]);
-      timingsCallback([_fakeFrameTiming]);
-
-      await Future<void>.delayed(Duration(milliseconds: 10));
-
-      expect(fixture.frameCallbackHandler.timingsCallback, isNull);
-      expect(fixture.nativeAppStartHandler.calls, 1);
-    });
-
-    test('handles empty timings', () async {
-      fixture.callIntegration();
-
-      final timingsCallback = fixture.frameCallbackHandler.timingsCallback!;
-      expect(
-        () => timingsCallback([]),
-        throwsA(isA<StateError>()),
-      );
-
-      await Future<void>.delayed(Duration(milliseconds: 10));
-
-      expect(fixture.frameCallbackHandler.timingsCallback, isNull);
-    });
-
-    test('removes timingsCallback after it was triggered', () async {
-      fixture.callIntegration();
-
-      final timingsCallback = fixture.frameCallbackHandler.timingsCallback!;
-      timingsCallback([
-        FrameTiming(
-            vsyncStart: 10,
-            buildStart: 10,
-            buildFinish: 10,
-            rasterStart: 10,
-            rasterFinish: 10,
-            rasterFinishWallTime: 10)
-      ]);
-
-      await Future<void>.delayed(Duration(milliseconds: 10));
-
-      expect(fixture.frameCallbackHandler.timingsCallback, isNull);
-    });
-
-    test('sets root transaction context and ttd transaction ids', () async {
-      fixture.callIntegration();
-
-      final timingsCallback = fixture.frameCallbackHandler.timingsCallback!;
-      timingsCallback([_fakeFrameTiming]);
-
-      expect(fixture.nativeAppStartHandler.context, isNotNull);
-
-      expect(fixture.nativeAppStartHandler.context?.name, 'root /');
-      expect(
-        fixture.nativeAppStartHandler.context?.operation,
-        // ignore: invalid_use_of_internal_member
-        SentrySpanOperations.uiLoad,
-      );
+    test('records configured standalone feature usage', () async {
+      await fixture.callIntegration();
 
       expect(
-        fixture.options.timeToDisplayTracker.transactionId,
-        fixture.nativeAppStartHandler.context?.spanId,
+        fixture.options.sdk.features,
+        contains('standaloneAppStartTracing'),
       );
+    });
+
+    test('samples sibling roots independently with one trace ID', () async {
+      var samplerCalls = 0;
+      fixture.options
+        ..tracesSampleRate = null
+        ..tracesSampler = (_) {
+          samplerCalls++;
+          return 1.0;
+        };
+
+      await fixture.callIntegration();
+      await pumpEventQueue();
+
+      expect(samplerCalls, 2);
+      expect(fixture.rootSpans, hasLength(2));
+      expect(
+        fixture.rootSpans.map((span) => span.context.traceId).toSet(),
+        hasLength(1),
+      );
+    });
+
+    test('keeps app start attached to ui.load when disabled', () async {
+      fixture.options.enableStandaloneAppStartTracing = false;
+
+      await fixture.callIntegration();
+      fixture.frameHandler.timingsCallback!([fixture.frameTiming]);
+      await pumpEventQueue(times: 10);
+
+      expect(fixture.appStartRoots, isEmpty);
+      final displayRoot = fixture.rootSpans.single.tracer;
+      expect(displayRoot.context.operation, 'ui.load');
+      expect(displayRoot.measurements['app_start_cold']?.value, 400);
+    });
+
+    test('processes the first-frame callback exactly once', () async {
+      await fixture.callIntegration();
+      final callback = fixture.frameHandler.timingsCallback!;
+
+      callback([fixture.frameTiming]);
+      callback([fixture.frameTiming]);
+      await pumpEventQueue(times: 10);
+
+      expect(fixture.frameHandler.timingsCallback, isNull);
+    });
+
+    test('keeps the first-frame callback after empty timings', () async {
+      await fixture.callIntegration();
+      final callback = fixture.frameHandler.timingsCallback!;
+
+      callback([]);
+      await pumpEventQueue();
+
+      expect(fixture.frameHandler.timingsCallback, same(callback));
+
+      callback([fixture.frameTiming]);
+      await pumpEventQueue(times: 10);
+
+      expect(fixture.frameHandler.timingsCallback, isNull);
+    });
+
+    test('keeps initial display when native timing is invalid', () async {
+      when(fixture.native.fetchNativeAppStart()).thenAnswer(
+        (_) async => fixture.nativeAppStart(appStartMilliseconds: 1000),
+      );
+
+      await fixture.callIntegration();
+
+      expect(fixture.appStartRoots, isEmpty);
+      expect(fixture.frameHandler.timingsCallback, isNotNull);
+    });
+
+    test('close abandons the standalone trace', () async {
+      await fixture.callIntegration();
+      await pumpEventQueue();
+      final root = fixture.appStartRoots.single;
+
+      fixture.sut.close();
+
+      expect(root.tracer.finished, isTrue);
+      expect(fixture.frameHandler.timingsCallback, isNull);
     });
   });
 }
 
 class Fixture {
-  final options = defaultTestOptions();
-  final hub = MockHub();
-
-  final frameCallbackHandler = FakeFrameCallbackHandler();
-  final nativeAppStartHandler = FakeNativeAppStartHandler();
-  final nativeAppStartHandlerV2 = FakeNativeAppStartHandlerV2();
-
-  late NativeAppStartIntegration sut = NativeAppStartIntegration(
-    frameCallbackHandler,
-    nativeAppStartHandler,
-    nativeAppStartHandlerV2,
+  final frameHandler = FakeFrameCallbackHandler();
+  final native = MockSentryNativeBinding();
+  final rootSpans = <SentrySpan>[];
+  List<SentrySpan> get appStartRoots =>
+      rootSpans.where((span) => span.context.operation == 'app.start').toList();
+  final processStart = DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+  final setup = DateTime.fromMillisecondsSinceEpoch(200, isUtc: true);
+  final snapshot = DateTime.fromMillisecondsSinceEpoch(300, isUtc: true);
+  final frameTiming = FrameTiming(
+    vsyncStart: 400000,
+    buildStart: 400000,
+    buildFinish: 400000,
+    rasterStart: 400000,
+    rasterFinish: 400000,
+    rasterFinishWallTime: 400000,
   );
 
+  late final options = defaultTestOptions(platform: MockPlatform.android())
+    ..tracesSampleRate = 1.0
+    ..traceLifecycle = SentryTraceLifecycle.static
+    ..enableStandaloneAppStartTracing = true
+    ..clock = () => snapshot;
+  late final hub = Hub(options);
+  late final sut = NativeAppStartIntegration(frameHandler, native);
+
   Fixture() {
-    when(hub.options).thenReturn(options);
+    SentryFlutter.sentrySetupStartTime = setup;
+    options.lifecycleRegistry.registerCallback<OnSpanStart>((event) {
+      if (event.span is SentrySpan && (event.span as SentrySpan).isRootSpan) {
+        rootSpans.add(event.span as SentrySpan);
+      }
+    });
+    options.timeToDisplayTracker = TimeToDisplayTracker(
+      hub: hub,
+      options: options,
+    );
+    options.timeToDisplayTrackerV2 = TimeToDisplayTrackerV2(
+      hub: hub,
+      frameCallbackHandler: frameHandler,
+    );
+    when(native.fetchNativeAppStart()).thenAnswer(
+      (_) async => nativeAppStart(),
+    );
   }
 
-  void callIntegration() {
-    sut.call(hub, options);
-  }
-}
+  NativeAppStart nativeAppStart({int appStartMilliseconds = 0}) =>
+      NativeAppStart(
+        appStartTime: appStartMilliseconds,
+        pluginRegistrationTime: 100,
+        isColdStart: true,
+        nativeSpanTimes: {},
+      );
 
-class FakeNativeAppStartHandler implements NativeAppStartHandler {
-  SentryTransactionContext? context;
-  DateTime? appStartEnd;
-  var calls = 0;
-
-  @override
-  Future<void> call(Hub hub, SentryFlutterOptions options,
-      {required DateTime? appStartEnd,
-      required SentryTransactionContext context}) async {
-    this.appStartEnd = appStartEnd;
-    this.context = context;
-    calls += 1;
-  }
-}
-
-class FakeNativeAppStartHandlerV2 implements NativeAppStartHandlerV2 {
-  DateTime? appStartEnd;
-  var calls = 0;
-
-  @override
-  Future<void> call(Hub hub, SentryFlutterOptions options,
-      {required DateTime appStartEnd}) async {
-    this.appStartEnd = appStartEnd;
-    calls += 1;
-  }
+  Future<void> callIntegration() => sut.call(hub, options);
 }

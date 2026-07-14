@@ -625,6 +625,22 @@ class Hub {
     return NoOpSentrySpan();
   }
 
+  /// Arms a one-shot absolute final deadline for a static transaction.
+  @internal
+  bool tryScheduleFinalTimeout(
+    ISentrySpan span,
+    DateTime deadlineTimestamp,
+  ) =>
+      span is SentryTracer && span.tryScheduleFinalTimeout(deadlineTimestamp);
+
+  /// Abandons a static transaction without capture.
+  @internal
+  void abandonSpan(ISentrySpan span) {
+    if (span is SentryTracer) {
+      span.abandon();
+    }
+  }
+
   static final _scopeKey = Object();
 
   /// The [Scope] forked by the innermost [startSpan] or [startSpanSync] call
@@ -865,6 +881,9 @@ class Hub {
     }
 
     final RecordingSentrySpanV2 span;
+    if (resolvedParentSpan?.segmentSpan.isTerminal ?? false) {
+      return NoOpSentrySpanV2.instance;
+    }
     if (resolvedParentSpan == null) {
       final samplingDecision = _sampleForRootSpan(name, attributes);
       if (samplingDecision == null) return NoOpSentrySpanV2.instance;
@@ -900,16 +919,24 @@ class Hub {
 
   /// Starts an idle root span. Idle spans are always root spans and are never
   /// children of another span.
+  ///
+  /// With [setAsActive] `true` (the default) the span becomes the hub-level
+  /// active span: spans created without an explicit parent attach to it, and
+  /// only one active idle span may run at a time. With [setAsActive] `false`
+  /// the span is detached — it never becomes the default parent, does not
+  /// block a bound idle span, and the caller owns ending it (the idle and
+  /// final timeouts remain as backstops).
   @internal
   SentrySpanV2 startIdleSpan(
     String name, {
     Duration idleTimeout = const Duration(seconds: 3),
     Duration finalTimeout = const Duration(seconds: 30),
     bool trimIdleSpanEndTimestamp = true,
+    bool setAsActive = true,
     Map<String, SentryAttribute>? attributes,
     DateTime? startTimestamp,
   }) {
-    if (_currentIdleSpan != null) {
+    if (setAsActive && _currentIdleSpan != null) {
       internalLogger.warning(
         () => 'Hub(internal): an idle span is already running. '
             'The current idle span should be ended before starting a new one.',
@@ -941,7 +968,9 @@ class Hub {
     }
 
     _options.lifecycleRegistry.dispatchCallback(OnSpanStartV2(span));
-    _idleSpan = span;
+    if (setAsActive) {
+      _idleSpan = span;
+    }
 
     return span;
   }

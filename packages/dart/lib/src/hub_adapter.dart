@@ -164,6 +164,16 @@ class HubAdapter implements Hub {
       );
 
   @override
+  bool tryScheduleFinalTimeout(
+    ISentrySpan span,
+    DateTime deadlineTimestamp,
+  ) =>
+      Sentry.currentHub.tryScheduleFinalTimeout(span, deadlineTimestamp);
+
+  @override
+  void abandonSpan(ISentrySpan span) => Sentry.currentHub.abandonSpan(span);
+
+  @override
   SentrySpanV2 startInactiveSpan(
     String name, {
     Map<String, SentryAttribute>? attributes,
@@ -265,6 +275,7 @@ class HubAdapter implements Hub {
     Duration idleTimeout = const Duration(seconds: 3),
     Duration finalTimeout = const Duration(seconds: 30),
     bool trimIdleSpanEndTimestamp = true,
+    bool setAsActive = true,
     Map<String, SentryAttribute>? attributes,
     DateTime? startTimestamp,
   }) =>
@@ -273,6 +284,7 @@ class HubAdapter implements Hub {
         idleTimeout: idleTimeout,
         finalTimeout: finalTimeout,
         trimIdleSpanEndTimestamp: trimIdleSpanEndTimestamp,
+        setAsActive: setAsActive,
         attributes: attributes,
         startTimestamp: startTimestamp,
       );

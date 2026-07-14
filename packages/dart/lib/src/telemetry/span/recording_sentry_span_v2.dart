@@ -30,6 +30,7 @@ base class RecordingSentrySpanV2 implements SentrySpanV2 {
   DateTime _startTimestamp;
   SentrySpanStatusV2 _status = SentrySpanStatusV2.ok;
   DateTime? _endTimestamp;
+  bool _isCancelled = false;
   String _name;
   SentryTraceContextHeader? _frozenDsc;
 
@@ -133,7 +134,7 @@ base class RecordingSentrySpanV2 implements SentrySpanV2 {
 
   @override
   void end({DateTime? endTimestamp}) {
-    if (isEnded) return;
+    if (isTerminal) return;
 
     _endTimestamp = (endTimestamp ?? _clock()).toUtc();
 
@@ -167,6 +168,18 @@ base class RecordingSentrySpanV2 implements SentrySpanV2 {
 
   @override
   bool get isEnded => _endTimestamp != null;
+
+  /// Whether this span's segment can no longer accept or capture spans.
+  @internal
+  bool get isTerminal => isEnded || segmentSpan._isCancelled;
+
+  /// Makes the span terminal without dispatching its capture callback.
+  @internal
+  void cancelWithoutCapture({DateTime? endTimestamp}) {
+    if (isTerminal) return;
+    _isCancelled = true;
+    _endTimestamp = (endTimestamp ?? _clock()).toUtc();
+  }
 
   @override
   Map<String, SentryAttribute> get attributes => Map.unmodifiable(_attributes);

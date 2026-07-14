@@ -131,6 +131,16 @@ class NoOpHub implements Hub {
       NoOpSentrySpan();
 
   @override
+  bool tryScheduleFinalTimeout(
+    ISentrySpan span,
+    DateTime deadlineTimestamp,
+  ) =>
+      false;
+
+  @override
+  void abandonSpan(ISentrySpan span) {}
+
+  @override
   void generateNewTrace() {}
 
   @override
@@ -196,6 +206,7 @@ class NoOpHub implements Hub {
     Duration idleTimeout = const Duration(seconds: 3),
     Duration finalTimeout = const Duration(seconds: 30),
     bool trimIdleSpanEndTimestamp = true,
+    bool setAsActive = true,
     Map<String, SentryAttribute>? attributes,
     DateTime? startTimestamp,
   }) =>
